@@ -6,6 +6,7 @@
 <title>Command Deck</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --bg:#11141b;
@@ -83,16 +84,39 @@
   .toast.show{opacity:1;}
 
   @media (max-width:900px){ .board{grid-template-columns:1fr;} .toolbar{flex-direction:column;align-items:stretch;} }
+
+  .gate{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100;}
+  .gate-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:28px 26px;width:100%;max-width:280px;text-align:center;}
+  .gate-box h2{font-family:'Space Grotesk',sans-serif;font-size:17px;margin:0 0 4px;}
+  .gate-box p{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  .gate-box input{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:10px 12px;font-size:14px;font-family:'Inter',sans-serif;text-align:center;letter-spacing:.1em;}
+  .gate-box input:focus{outline:none;border-color:var(--muted-2);}
+  .gate-box .btn{width:100%;margin-top:10px;}
+  .gate-error{color:var(--youtube);font-size:12px;margin-top:10px;min-height:14px;}
+  .gate.shake .gate-box{animation:shake .3s;}
+  @keyframes shake{25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
+  .hidden{display:none !important;}
 </style>
 </head>
 <body>
-<div class="wrap">
+
+<div class="gate" id="gate">
+  <div class="gate-box">
+    <h2>Command Deck</h2>
+    <p>Enter passcode to continue</p>
+    <input type="password" id="gateInput" autocomplete="off" maxlength="40">
+    <button class="btn" id="gateBtn">Unlock</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div class="wrap hidden" id="app">
   <header>
     <div>
       <h1>Command Deck</h1>
-      <p class="sub">Every plan, one board. Works fully offline — your data stays on this device.</p>
+      <p class="sub">Every plan, one board. Synced live across your devices.</p>
     </div>
-    <div class="status-pill" id="statusPill">ready</div>
+    <div class="status-pill" id="statusPill">connecting…</div>
   </header>
 
   <div class="meter">
@@ -120,6 +144,19 @@
 
 <script>
 (function(){
+  // ---- Config ---------------------------------------------------------
+  const SUPABASE_URL = 'https://iurmlkqlasufztgtrzpf.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1cm1sa3FsYXN1Znp0Z3RyenBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTM2MTAsImV4cCI6MjEwMjUyOTYxMH0.BGDtHiW9FnxnhiuyHe9rFQNqNbFAIxWx3YWP4coDjI8';
+  // Cosmetic gate only — not real security. The anon key above is public
+  // (visible in page source) and the database enforces access via RLS, not
+  // this passcode. Change it before deploying, and don't put sensitive data
+  // in this board.
+  const PASSCODE = 'changeme';
+  const GATE_KEY = 'command-deck-gate-ok';
+
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // ---- Board data -------------------------------------------------------
   const AREA_DEFS = {
     youtube:    {label:'YouTube',    color:'var(--youtube)'},
     consulting: {label:'Consulting', color:'var(--consulting)'},
@@ -135,7 +172,6 @@
     {id:'blocked',  label:'Blocked'},
     {id:'done',     label:'Done'}
   ];
-  const STORAGE_KEY = 'command-deck-board-v1';
 
   let state = { tasks: [] };
   let activeAreaFilter = null;
@@ -157,44 +193,88 @@
 
   function uid(){ return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
-  function load(){
-    try{
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if(raw){
-        state = JSON.parse(raw);
-      } else {
-        state = seedData();
-        save();
-      }
-    } catch(e){
-      state = seedData();
+  function mapRow(row){
+    return {
+      id: row.id,
+      title: row.title,
+      area: row.area,
+      status: row.status,
+      notes: row.notes || '',
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  // ---- Remote load + writes ---------------------------------------------
+  async function load(){
+    $statusPill.textContent = 'connecting…';
+    const { data, error } = await sb.from('tasks').select('*');
+    if(error){
+      $statusPill.textContent = 'sync failed';
+      showToast('Could not load board: ' + error.message);
+      return;
     }
+    state.tasks = data.map(mapRow);
+    $statusPill.textContent = 'synced';
     populateAreaSelect();
+    render();
+    subscribeRealtime();
+  }
+
+  async function insertTask(task){
+    const { error } = await sb.from('tasks').insert({
+      id: task.id, title: task.title, area: task.area,
+      status: task.status, notes: task.notes
+    });
+    if(error){
+      state.tasks = state.tasks.filter(t=>t.id!==task.id);
+      render();
+      showToast('Could not save: ' + error.message);
+    }
+  }
+
+  async function patchTask(id, patch){
+    const { error } = await sb.from('tasks').update(patch).eq('id', id);
+    if(error) showToast('Could not save change: ' + error.message);
+  }
+
+  async function removeTask(id){
+    const { error } = await sb.from('tasks').delete().eq('id', id);
+    if(error) showToast('Could not delete: ' + error.message);
+  }
+
+  function applyLocalPatch(task, patch){
+    Object.assign(task, patch);
+    task.updatedAt = new Date().toISOString();
+    render();
+    patchTask(task.id, { ...patch, updated_at: task.updatedAt });
+  }
+
+  // ---- Realtime -----------------------------------------------------
+  function upsertLocal(row){
+    const mapped = mapRow(row);
+    const idx = state.tasks.findIndex(t=>t.id===mapped.id);
+    if(idx>=0) state.tasks[idx] = mapped; else state.tasks.push(mapped);
+    render();
+  }
+  function removeLocal(id){
+    state.tasks = state.tasks.filter(t=>t.id!==id);
     render();
   }
 
-  function save(){
-    try{
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      $statusPill.textContent = 'saved on this device';
-    } catch(e){
-      $statusPill.textContent = 'save failed';
-      showToast('Could not save — storage may be full or disabled');
-    }
-  }
-
-  function seedData(){
-    const mk = (title, area, status, notes) => ({id:uid(), title, area, status, notes: notes||'', createdAt: Date.now(), updatedAt: Date.now()});
-    return { tasks: [
-      mk('Outline next YouTube video', 'youtube', 'todo', 'Topic + rough shot list'),
-      mk('Edit backlog: 2 videos waiting', 'youtube', 'backlog'),
-      mk('Define consulting service offer', 'consulting', 'backlog', 'What exactly am I selling, to whom'),
-      mk('Set up a simple landing page', 'consulting', 'backlog'),
-      mk('Pick first skill to focus on this quarter', 'skill', 'todo'),
-      mk('Raspberry Pi: finish home sensor project', 'hobby', 'progress'),
-      mk('Research index funds vs individual stocks', 'invest', 'backlog'),
-      mk('Open brokerage account', 'invest', 'blocked', 'Waiting on ID verification'),
-    ]};
+  function subscribeRealtime(){
+    sb.channel('tasks-sync')
+      .on('postgres_changes', { event:'*', schema:'public', table:'tasks' }, payload => {
+        if(payload.eventType === 'INSERT' || payload.eventType === 'UPDATE'){
+          upsertLocal(payload.new);
+        } else if(payload.eventType === 'DELETE'){
+          removeLocal(payload.old.id);
+        }
+      })
+      .subscribe(status => {
+        if(status === 'SUBSCRIBED') $statusPill.textContent = 'synced · live';
+        else if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') $statusPill.textContent = 'live sync unavailable';
+      });
   }
 
   function populateAreaSelect(){
@@ -263,7 +343,7 @@
       if(tasks.length===0){
         cardsWrap.innerHTML = `<div class="empty">Nothing here</div>`;
       } else {
-        tasks.sort((a,b)=>b.updatedAt-a.updatedAt).forEach(t=>{
+        tasks.sort((a,b)=> b.updatedAt.localeCompare(a.updatedAt)).forEach(t=>{
           cardsWrap.appendChild(renderCard(t));
         });
       }
@@ -279,10 +359,7 @@
         if(!dragId) return;
         const task = state.tasks.find(t=>t.id===dragId);
         if(task && task.status !== st.id){
-          task.status = st.id;
-          task.updatedAt = Date.now();
-          save();
-          render();
+          applyLocalPatch(task, { status: st.id });
         }
       });
 
@@ -317,7 +394,8 @@
     card.querySelector('[data-act="del"]').addEventListener('click', ()=>{
       if(confirm('Delete "'+t.title+'"?')){
         state.tasks = state.tasks.filter(x=>x.id!==t.id);
-        save(); render();
+        render();
+        removeTask(t.id);
         showToast('Deleted');
       }
     });
@@ -325,10 +403,10 @@
       const newTitle = prompt('Edit title:', t.title);
       if(newTitle===null) return;
       const newNotes = prompt('Edit notes (optional):', t.notes||'');
-      t.title = newTitle.trim() || t.title;
-      t.notes = newNotes===null ? t.notes : newNotes;
-      t.updatedAt = Date.now();
-      save(); render();
+      applyLocalPatch(t, {
+        title: newTitle.trim() || t.title,
+        notes: newNotes===null ? t.notes : newNotes
+      });
     });
 
     return card;
@@ -346,9 +424,12 @@
     const title = $newTitle.value.trim();
     if(!title) return;
     const area = $newArea.value;
-    state.tasks.push({id:uid(), title, area, status:'backlog', notes:'', createdAt:Date.now(), updatedAt:Date.now()});
+    const now = new Date().toISOString();
+    const task = {id:uid(), title, area, status:'backlog', notes:'', createdAt:now, updatedAt:now};
+    state.tasks.push(task);
     $newTitle.value = '';
-    save(); render();
+    render();
+    insertTask(task);
   }
 
   document.getElementById('exportBtn').addEventListener('click', ()=>{
@@ -369,22 +450,66 @@
     const file = e.target.files[0];
     if(!file) return;
     const reader = new FileReader();
-    reader.onload = ()=>{
+    reader.onload = async ()=>{
       try{
         const parsed = JSON.parse(reader.result);
         if(!parsed.tasks || !Array.isArray(parsed.tasks)) throw new Error('bad format');
-        state = parsed;
-        save(); render();
+        $statusPill.textContent = 'importing…';
+        const { error: delErr } = await sb.from('tasks').delete().neq('id', '');
+        if(delErr) throw delErr;
+        const rows = parsed.tasks.map(t => ({
+          id: t.id || uid(), title: t.title, area: t.area,
+          status: t.status, notes: t.notes || ''
+        }));
+        if(rows.length){
+          const { error: insErr } = await sb.from('tasks').insert(rows);
+          if(insErr) throw insErr;
+        }
+        await load();
         showToast('Imported');
       } catch(err){
-        alert('Could not read that file — make sure it\\'s a Command Deck export.');
+        $statusPill.textContent = 'synced';
+        alert('Could not import that file: ' + err.message);
       }
     };
     reader.readAsText(file);
     e.target.value = '';
   });
 
-  load();
+  // ---- Passcode gate ------------------------------------------------
+  const $gate = document.getElementById('gate');
+  const $app = document.getElementById('app');
+  const $gateInput = document.getElementById('gateInput');
+  const $gateBtn = document.getElementById('gateBtn');
+  const $gateError = document.getElementById('gateError');
+
+  function unlock(){
+    $gate.classList.add('hidden');
+    $app.classList.remove('hidden');
+    load();
+  }
+
+  function tryPasscode(){
+    if($gateInput.value === PASSCODE){
+      sessionStorage.setItem(GATE_KEY, '1');
+      unlock();
+    } else {
+      $gateError.textContent = 'Incorrect passcode';
+      $gate.classList.add('shake');
+      setTimeout(()=>$gate.classList.remove('shake'), 300);
+      $gateInput.value = '';
+      $gateInput.focus();
+    }
+  }
+
+  $gateBtn.addEventListener('click', tryPasscode);
+  $gateInput.addEventListener('keydown', e=>{ if(e.key==='Enter') tryPasscode(); });
+
+  if(sessionStorage.getItem(GATE_KEY) === '1'){
+    unlock();
+  } else {
+    $gateInput.focus();
+  }
 })();
 </script>
 </body>
