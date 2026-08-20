@@ -72,8 +72,13 @@
   .card{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--other);border-radius:8px;padding:10px 10px 8px;cursor:grab;}
   .card:active{cursor:grabbing;}
   .card.dragging{opacity:.4;}
+  .card-parent{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted-2);margin:0 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .card-title{font-size:13.5px;font-weight:500;line-height:1.35;margin:0 0 6px;}
   .card-notes{font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 8px;white-space:pre-wrap;}
+  .card-progress{margin:0 0 8px;}
+  .card-progress-bar{height:4px;border-radius:3px;background:var(--line);overflow:hidden;}
+  .card-progress-fill{height:100%;background:var(--muted);border-radius:3px;}
+  .card-progress-label{display:block;margin-top:4px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted-2);}
   .card-foot{display:flex;align-items:center;justify-content:space-between;}
   .card-area{font-family:'JetBrains Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);}
   .card-actions{display:flex;gap:8px;}
@@ -200,9 +205,14 @@
       area: row.area,
       status: row.status,
       notes: row.notes || '',
+      parentId: row.parent_id || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
+  }
+
+  function children(taskId){
+    return state.tasks.filter(t=>t.parentId===taskId);
   }
 
   // ---- Remote load + writes ---------------------------------------------
@@ -224,7 +234,7 @@
   async function insertTask(task){
     const { error } = await sb.from('tasks').insert({
       id: task.id, title: task.title, area: task.area,
-      status: task.status, notes: task.notes
+      status: task.status, notes: task.notes, parent_id: task.parentId || null
     });
     if(error){
       state.tasks = state.tasks.filter(t=>t.id!==task.id);
@@ -368,16 +378,28 @@
   }
 
   function renderCard(t){
+    const isSubtask = !!t.parentId;
+    const parent = isSubtask ? state.tasks.find(p=>p.id===t.parentId) : null;
+    const kids = isSubtask ? [] : children(t.id);
+    const doneKids = kids.filter(k=>k.status==='done').length;
+
     const card = document.createElement('div');
     card.className = 'card';
     card.style.borderLeftColor = AREA_DEFS[t.area] ? AREA_DEFS[t.area].color : 'var(--other)';
     card.draggable = true;
     card.innerHTML = `
+      ${isSubtask ? `<p class="card-parent">↳ ${parent ? escapeHtml(parent.title) : 'parent task'}</p>` : ''}
       <p class="card-title"></p>
       ${t.notes ? `<p class="card-notes"></p>` : ''}
+      ${kids.length ? `
+        <div class="card-progress">
+          <div class="card-progress-bar"><div class="card-progress-fill" style="width:${(doneKids/kids.length*100).toFixed(0)}%"></div></div>
+          <span class="card-progress-label">Sub-tasks ${doneKids}/${kids.length}</span>
+        </div>` : ''}
       <div class="card-foot">
         <span class="card-area">${AREA_DEFS[t.area] ? AREA_DEFS[t.area].label : 'Other'}</span>
         <div class="card-actions">
+          ${!isSubtask ? `<button data-act="addsub" title="Add sub-task">＋</button>` : ''}
           <button data-act="edit" title="Edit">✎</button>
           <button data-act="del" title="Delete">✕</button>
         </div>
@@ -391,9 +413,17 @@
     });
     card.addEventListener('dragend', ()=> card.classList.remove('dragging'));
 
+    const addSubBtn = card.querySelector('[data-act="addsub"]');
+    if(addSubBtn) addSubBtn.addEventListener('click', ()=> addSubtask(t));
+
     card.querySelector('[data-act="del"]').addEventListener('click', ()=>{
-      if(confirm('Delete "'+t.title+'"?')){
-        state.tasks = state.tasks.filter(x=>x.id!==t.id);
+      const kidCount = children(t.id).length;
+      const msg = kidCount>0
+        ? `Delete "${t.title}" and its ${kidCount} sub-task${kidCount>1?'s':''}?`
+        : `Delete "${t.title}"?`;
+      if(confirm(msg)){
+        const idsToRemove = new Set([t.id, ...children(t.id).map(k=>k.id)]);
+        state.tasks = state.tasks.filter(x=>!idsToRemove.has(x.id));
         render();
         removeTask(t.id);
         showToast('Deleted');
@@ -410,6 +440,23 @@
     });
 
     return card;
+  }
+
+  function addSubtask(parentTask){
+    const title = prompt(`Sub-task of "${parentTask.title}":`);
+    if(title===null || !title.trim()) return;
+    const now = new Date().toISOString();
+    const task = {
+      id: uid(), title: title.trim(), area: parentTask.area, status: 'backlog',
+      notes: '', parentId: parentTask.id, createdAt: now, updatedAt: now
+    };
+    state.tasks.push(task);
+    render();
+    insertTask(task);
+  }
+
+  function escapeHtml(s){
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
   function render(){
@@ -459,8 +506,8 @@
         if(delErr) throw delErr;
         const rows = parsed.tasks.map(t => ({
           id: t.id || uid(), title: t.title, area: t.area,
-          status: t.status, notes: t.notes || ''
-        }));
+          status: t.status, notes: t.notes || '', parent_id: t.parentId || null
+        })).sort((a,b) => (a.parent_id ? 1 : 0) - (b.parent_id ? 1 : 0));
         if(rows.length){
           const { error: insErr } = await sb.from('tasks').insert(rows);
           if(insErr) throw insErr;
