@@ -75,9 +75,12 @@
   .card-parent{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted-2);margin:0 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .card-title{font-size:13.5px;font-weight:500;line-height:1.35;margin:0 0 6px;}
   .card-notes{font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 8px;white-space:pre-wrap;}
-  .card-progress{margin:0 0 8px;}
-  .card-progress-bar{height:4px;border-radius:3px;background:var(--line);overflow:hidden;}
-  .card-progress-fill{height:100%;background:var(--muted);border-radius:3px;}
+  .card-progress{display:flex;align-items:flex-start;gap:6px;width:100%;margin:0 0 8px;background:none;border:none;padding:0;cursor:pointer;text-align:left;font:inherit;}
+  .card-progress:hover .card-progress-label{color:var(--text);}
+  .card-progress-chevron{color:var(--muted-2);font-size:10px;line-height:1.6;flex:none;}
+  .card-progress-body{flex:1;min-width:0;}
+  .card-progress-bar{display:block;height:4px;border-radius:3px;background:var(--line);overflow:hidden;}
+  .card-progress-fill{display:block;height:100%;background:var(--muted);border-radius:3px;}
   .card-progress-label{display:block;margin-top:4px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted-2);}
   .card-foot{display:flex;align-items:center;justify-content:space-between;}
   .card-area{font-family:'JetBrains Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);}
@@ -178,9 +181,13 @@
     {id:'done',     label:'Done'}
   ];
 
+  const COLLAPSE_KEY = 'command-deck-collapsed';
+
   let state = { tasks: [] };
   let activeAreaFilter = null;
   let dragId = null;
+  let collapsedParents = new Set();
+  try{ collapsedParents = new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]')); } catch(e){}
 
   const $board = document.getElementById('board');
   const $meterBar = document.getElementById('meterBar');
@@ -213,6 +220,13 @@
 
   function children(taskId){
     return state.tasks.filter(t=>t.parentId===taskId);
+  }
+
+  function toggleCollapse(taskId){
+    if(collapsedParents.has(taskId)) collapsedParents.delete(taskId);
+    else collapsedParents.add(taskId);
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedParents]));
+    render();
   }
 
   // ---- Remote load + writes ---------------------------------------------
@@ -341,7 +355,9 @@
       col.className = 'col';
       col.dataset.status = st.id;
 
-      const tasks = state.tasks.filter(t => t.status===st.id && (!activeAreaFilter || t.area===activeAreaFilter));
+      const tasks = state.tasks.filter(t => t.status===st.id
+        && (!activeAreaFilter || t.area===activeAreaFilter)
+        && !(t.parentId && collapsedParents.has(t.parentId)));
 
       col.innerHTML = `<div class="col-head">
           <div class="col-head-title">${st.label}</div>
@@ -382,6 +398,7 @@
     const parent = isSubtask ? state.tasks.find(p=>p.id===t.parentId) : null;
     const kids = isSubtask ? [] : children(t.id);
     const doneKids = kids.filter(k=>k.status==='done').length;
+    const collapsed = collapsedParents.has(t.id);
 
     const card = document.createElement('div');
     card.className = 'card';
@@ -392,10 +409,13 @@
       <p class="card-title"></p>
       ${t.notes ? `<p class="card-notes"></p>` : ''}
       ${kids.length ? `
-        <div class="card-progress">
-          <div class="card-progress-bar"><div class="card-progress-fill" style="width:${(doneKids/kids.length*100).toFixed(0)}%"></div></div>
-          <span class="card-progress-label">Sub-tasks ${doneKids}/${kids.length}</span>
-        </div>` : ''}
+        <button class="card-progress" data-act="collapse" title="${collapsed ? 'Expand' : 'Collapse'} sub-tasks">
+          <span class="card-progress-chevron">${collapsed ? '▸' : '▾'}</span>
+          <span class="card-progress-body">
+            <span class="card-progress-bar"><span class="card-progress-fill" style="width:${(doneKids/kids.length*100).toFixed(0)}%"></span></span>
+            <span class="card-progress-label">Sub-tasks ${doneKids}/${kids.length}${collapsed ? ' · hidden' : ''}</span>
+          </span>
+        </button>` : ''}
       <div class="card-foot">
         <span class="card-area">${AREA_DEFS[t.area] ? AREA_DEFS[t.area].label : 'Other'}</span>
         <div class="card-actions">
@@ -416,6 +436,9 @@
     const addSubBtn = card.querySelector('[data-act="addsub"]');
     if(addSubBtn) addSubBtn.addEventListener('click', ()=> addSubtask(t));
 
+    const collapseBtn = card.querySelector('[data-act="collapse"]');
+    if(collapseBtn) collapseBtn.addEventListener('click', ()=> toggleCollapse(t.id));
+
     card.querySelector('[data-act="del"]').addEventListener('click', ()=>{
       const kidCount = children(t.id).length;
       const msg = kidCount>0
@@ -424,6 +447,7 @@
       if(confirm(msg)){
         const idsToRemove = new Set([t.id, ...children(t.id).map(k=>k.id)]);
         state.tasks = state.tasks.filter(x=>!idsToRemove.has(x.id));
+        if(collapsedParents.delete(t.id)) localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedParents]));
         render();
         removeTask(t.id);
         showToast('Deleted');
@@ -451,6 +475,10 @@
       notes: '', parentId: parentTask.id, createdAt: now, updatedAt: now
     };
     state.tasks.push(task);
+    if(collapsedParents.has(parentTask.id)){
+      collapsedParents.delete(parentTask.id);
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedParents]));
+    }
     render();
     insertTask(task);
   }
