@@ -1,6 +1,6 @@
 # Kanban Board MCP Server
 
-A small remote MCP server that lets Claude (Claude.ai, Cowork, Claude Desktop, Claude Code)
+A remote MCP server that lets Claude (Claude.ai, Cowork, Claude Desktop, Claude Code)
 manage tasks on the Command Deck board directly — add tasks, add sub-tasks, move
 things between columns, and list what's there.
 
@@ -13,18 +13,29 @@ permissions and shows up live in the board via the existing realtime sync.
 
 ## Auth
 
-The server requires a bearer token on every request — set as the `MCP_TOKEN`
-secret. This is separate from (and more meaningful than) the board's cosmetic
-passcode gate: this token is the only thing standing between anyone who finds
-this server's URL and your task data, so keep it secret.
+The server is a real OAuth 2.1 authorization server (via
+[`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider)),
+because Claude.ai's custom-connector UI didn't offer a plain API-key/header
+option when this was built. Connecting asks Claude.ai to register itself as a
+client (Dynamic Client Registration), redirects you to a password screen
+served by this Worker, and — once you enter the password — issues Claude a
+proper OAuth access token (with refresh) scoped only to this server.
+
+The `OWNER_PASSWORD` secret is that password. It's the only thing standing
+between anyone who finds this server's URL and your task data, so treat it
+like any other password.
 
 ## First-time setup
 
 ```bash
 cd mcp-server
 npm install
-npx wrangler login          # authorizes the CLI against your Cloudflare account
-npx wrangler secret put MCP_TOKEN   # paste a long random token when prompted
+npx wrangler login                      # authorizes the CLI against your Cloudflare account
+
+npx wrangler kv namespace create OAUTH_KV
+# copy the printed "id" into wrangler.jsonc, replacing REPLACE_WITH_KV_NAMESPACE_ID
+
+npx wrangler secret put OWNER_PASSWORD  # paste a real password when prompted
 npx wrangler deploy
 ```
 
@@ -34,32 +45,39 @@ npx wrangler deploy
 https://kanban-mcp.<your-subdomain>.workers.dev
 ```
 
-The MCP endpoint is that URL plus `/mcp`.
+The MCP endpoint is that URL plus `/mcp`; the OAuth endpoints (`/authorize`,
+`/oauth/token`, `/oauth/register`, and the `/.well-known/...` discovery
+documents) all live on the same origin and don't need separate configuration.
 
 ## Local testing
 
-Copy `.dev.vars.example` to `.dev.vars` and fill in a test `MCP_TOKEN`, then:
+Copy `.dev.vars.example` to `.dev.vars` and fill in a test `OWNER_PASSWORD`,
+then:
 
 ```bash
 npx wrangler dev
 ```
 
-This serves the same code at `http://localhost:8787/mcp` for testing with curl
-or the [MCP inspector](https://modelcontextprotocol.io/legacy/tools/inspector)
-before deploying.
+This serves the same code at `http://localhost:8787` — `wrangler dev` runs a
+local, disk-backed KV store automatically, so the placeholder KV id in
+`wrangler.jsonc` is fine for local testing; you only need the real KV
+namespace once you deploy. The full OAuth flow (DCR → `/authorize` → password
+→ code → token exchange → authenticated tool call) can be driven with curl
+this way before connecting Claude.ai for real.
 
 ## Connecting it to Claude.ai / Cowork
 
 1. In Claude.ai, go to **Settings → Connectors → Add custom connector**.
 2. Name: `Kanban Board` (or anything you like).
 3. URL: `https://kanban-mcp.<your-subdomain>.workers.dev/mcp`
-4. Authentication: choose the API key / bearer token option if offered, and
-   enter it as header `Authorization` with value `Bearer <your MCP_TOKEN>`.
-   (This is currently a beta feature on Claude's side — if your account's
-   "Add custom connector" screen only offers OAuth client ID/secret fields
-   and no plain header option, the token approach isn't available yet; ask
-   for the fallback instead of guessing.)
-5. Save and try asking Claude to list or add a task.
+4. Claude.ai will discover that this is an OAuth-protected server automatically
+   (via the `/.well-known/oauth-protected-resource` and
+   `/.well-known/oauth-authorization-server` documents) and register itself as
+   a client. No manual client ID/secret entry needed.
+5. It'll open the `/authorize` page in a browser tab — enter `OWNER_PASSWORD`
+   there. On success you're redirected back to Claude.ai with the connector
+   active.
+6. Try asking Claude to list or add a task.
 
 ## Changing the tools
 
@@ -70,3 +88,10 @@ description the calling model sees. Area and status values are validated
 against the same fixed lists (`AREAS`, `STATUSES`) as `index.html`, so a
 mismatch here would mean the two are out of sync — update both together if
 you ever add a new area or column.
+
+## Changing the login page
+
+`loginPage()` in `src/index.ts` renders the `/authorize` screen. It's a
+single password field styled to loosely match the board's dark UI — nothing
+fancy, since it's shown once per Claude.ai connection (tokens refresh
+automatically after that).

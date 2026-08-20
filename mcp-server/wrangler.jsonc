@@ -21,7 +21,18 @@
 	"vars": {
 		"SUPABASE_URL": "https://iurmlkqlasufztgtrzpf.supabase.co",
 		"SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1cm1sa3FsYXN1Znp0Z3RyenBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTM2MTAsImV4cCI6MjEwMjUyOTYxMH0.BGDtHiW9FnxnhiuyHe9rFQNqNbFAIxWx3YWP4coDjI8"
-	}
+	},
+	/**
+	 * OAuth token/grant storage for @cloudflare/workers-oauth-provider.
+	 * Create with: npx wrangler kv namespace create OAUTH_KV
+	 * then replace "REPLACE_WITH_KV_NAMESPACE_ID" below with the printed id.
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "REPLACE_WITH_KV_NAMESPACE_ID"
+		}
+	]
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

@@ -1,20 +1,28 @@
 import {
 	McpServer,
-	OAuthError,
-	OAuthErrorCode,
-	bearerAuthChallengeResponse,
-	requireBearerAuth,
-	type AuthInfo,
-	type OAuthTokenVerifier,
 } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import {
+	AuthorizationError,
+	OAuthProvider,
+	type AuthRequest,
+	type OAuthHelpers,
+} from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
 
 interface WorkerEnv {
 	SUPABASE_URL: string;
 	SUPABASE_ANON_KEY: string;
-	MCP_TOKEN: string;
+	OWNER_PASSWORD: string;
+	OAUTH_KV: KVNamespace;
+	OAUTH_PROVIDER: OAuthHelpers;
 }
+
+type AuthProps = { owner: true };
+
+type FetchHandler = {
+	fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Response | Promise<Response>;
+};
 
 const AREAS = ["youtube", "consulting", "skill", "hobby", "invest", "other"] as const;
 const STATUSES = ["backlog", "todo", "progress", "blocked", "done"] as const;
@@ -242,30 +250,108 @@ function createServer(env: WorkerEnv) {
 	return server;
 }
 
-function makeVerifier(env: WorkerEnv): OAuthTokenVerifier {
-	return {
-		async verifyAccessToken(token: string): Promise<AuthInfo> {
-			if (!env.MCP_TOKEN || token !== env.MCP_TOKEN) {
-				throw new OAuthError(OAuthErrorCode.InvalidToken, "Invalid or missing bearer token");
-			}
-			return {
-				token,
-				clientId: "kanban-board-owner",
-				scopes: ["mcp"],
-				// Static personal token — far-future expiry rather than real rotation.
-				expiresAt: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365 * 10,
-			};
-		},
-	};
-}
-
-export default {
-	async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
-		const gate = requireBearerAuth({ verifier: makeVerifier(env) });
-		const authResult = await gate(request);
-		if (authResult instanceof Response) return authResult;
-
+// Protected by OAuthProvider below — only ever invoked with a valid access token.
+const mcpApiHandler: FetchHandler = {
+	fetch(request, env, ctx) {
 		const handler = createMcpHandler(() => createServer(env));
 		return handler(request, env, ctx);
 	},
-} satisfies ExportedHandler<WorkerEnv>;
+};
+
+function loginPage(actionUrl: string, clientName: string | undefined, error?: string): Response {
+	const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize — Command Deck</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:#11141b;color:#e9ebf1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+  .box{background:#181c26;border:1px solid #2a3040;border-radius:10px;padding:28px 26px;width:100%;max-width:300px;text-align:center;}
+  h1{font-size:17px;margin:0 0 4px;}
+  p{color:#8a91a6;font-size:13px;margin:0 0 16px;}
+  input{width:100%;box-sizing:border-box;background:#1f2430;border:1px solid #2a3040;border-radius:7px;
+    color:#e9ebf1;padding:10px 12px;font-size:14px;text-align:center;}
+  input:focus{outline:none;border-color:#5c6376;}
+  button{width:100%;margin-top:10px;background:#e9ebf1;color:#11141b;border:none;border-radius:7px;
+    padding:9px 16px;font-weight:600;font-size:13px;cursor:pointer;}
+  .err{color:#ef5b5b;font-size:12px;margin-top:10px;min-height:14px;}
+</style></head>
+<body>
+  <div class="box">
+    <h1>Command Deck</h1>
+    <p>${clientName ? `Allow "${escapeHtml(clientName)}" to manage your tasks?` : "Enter your password to continue"}</p>
+    <form method="POST" action="${actionUrl}">
+      <input type="password" name="password" autocomplete="current-password" autofocus>
+      <button type="submit">Authorize</button>
+      <div class="err">${error ? escapeHtml(error) : ""}</div>
+    </form>
+  </div>
+</body></html>`;
+	return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
+function escapeHtml(s: string): string {
+	return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
+function authErrorResponse(error: unknown): Response {
+	if (!(error instanceof AuthorizationError)) throw error;
+	if (!error.redirectUri) return new Response(error.description, { status: 400 });
+	const redirect = new URL(error.redirectUri);
+	redirect.searchParams.set("error", error.code);
+	redirect.searchParams.set("error_description", error.description);
+	if (error.state) redirect.searchParams.set("state", error.state);
+	if (error.issuer) redirect.searchParams.set("iss", error.issuer);
+	return Response.redirect(redirect.toString(), 302);
+}
+
+const defaultHandler: FetchHandler = {
+	async fetch(request, env) {
+		const url = new URL(request.url);
+		if (url.pathname !== "/authorize") return new Response("Not found", { status: 404 });
+
+		let oauthRequest: AuthRequest;
+		try {
+			oauthRequest = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+		} catch (error) {
+			return authErrorResponse(error);
+		}
+
+		const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
+		if (!client) return new Response("Unknown OAuth client", { status: 400 });
+
+		const actionUrl = url.pathname + url.search;
+
+		if (request.method === "GET") {
+			return loginPage(actionUrl, client.clientName);
+		}
+
+		if (request.method === "POST") {
+			const form = await request.formData();
+			const password = form.get("password");
+			if (typeof password !== "string" || password.length === 0 || password !== env.OWNER_PASSWORD) {
+				return loginPage(actionUrl, client.clientName, "Incorrect password");
+			}
+
+			const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
+				request: oauthRequest,
+				userId: "owner",
+				metadata: { clientName: client.clientName ?? "Unknown client" },
+				scope: oauthRequest.scope,
+				props: { owner: true } satisfies AuthProps,
+			});
+			return Response.redirect(redirectTo, 302);
+		}
+
+		return new Response("Method not allowed", { status: 405 });
+	},
+};
+
+export default new OAuthProvider<WorkerEnv>({
+	apiRoute: "/mcp",
+	apiHandler: mcpApiHandler,
+	defaultHandler,
+	authorizeEndpoint: "/authorize",
+	tokenEndpoint: "/oauth/token",
+	clientRegistrationEndpoint: "/oauth/register",
+	scopesSupported: ["mcp"],
+});
