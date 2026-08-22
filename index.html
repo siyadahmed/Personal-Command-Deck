@@ -97,8 +97,23 @@
   .card-actions button{background:none;border:none;color:var(--muted-2);cursor:pointer;font-size:12px;padding:0;}
   .card-actions button:hover{color:var(--text);}
 
-  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);border:1px solid var(--text);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .2s;font-family:'DM Mono',ui-monospace,monospace;}
+  /* Paper label, not an inverted chip — keeps the ink-on-cream world. */
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel-2);border:1px solid var(--text);color:var(--text);padding:7px 16px;border-radius:6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:0;pointer-events:none;transition:opacity .2s;font-family:'DM Mono',ui-monospace,monospace;box-shadow:0 4px 14px rgba(28,58,82,.16);}
   .toast.show{opacity:1;}
+
+  /* ---- Dialogs (replacing native prompt/confirm/alert) ---- */
+  .modal-backdrop{position:fixed;inset:0;background:rgba(28,58,82,.42);display:flex;align-items:center;justify-content:center;padding:20px;z-index:200;}
+  .modal{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 14px 40px rgba(28,58,82,.28);width:100%;max-width:430px;padding:22px 22px 18px;display:flex;flex-direction:column;gap:14px;}
+  .modal-title{font-family:'Cormorant Garamond',Georgia,serif;font-size:25px;font-weight:700;line-height:1.15;margin:0;text-wrap:balance;}
+  .modal-message{font-size:13.5px;line-height:1.5;color:var(--muted);margin:0;overflow-wrap:anywhere;}
+  .modal-fields{display:flex;flex-direction:column;gap:12px;}
+  .modal-field label{display:block;font-family:'DM Mono',ui-monospace,monospace;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:5px;}
+  .modal-field input,.modal-field textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px 11px;font-size:14px;line-height:1.45;font-family:'Spectral',Georgia,serif;}
+  .modal-field textarea{min-height:94px;resize:vertical;}
+  .modal-field input::placeholder,.modal-field textarea::placeholder{color:var(--muted-2);opacity:.8;}
+  .modal-field input:focus,.modal-field textarea:focus{outline:2px solid var(--consulting);outline-offset:1px;border-color:var(--consulting);}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;}
+  .btn-danger{background:var(--youtube);color:var(--bg);}
 
   /* In column direction the toolbar's flex-basis would apply to height,
      stretching the quick-add box to 480px tall — pin it back to content. */
@@ -168,6 +183,18 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<div class="modal-backdrop hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal">
+    <h2 class="modal-title" id="modalTitle"></h2>
+    <p class="modal-message" id="modalMessage"></p>
+    <div class="modal-fields" id="modalFields"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="modalCancel">Cancel</button>
+      <button type="button" class="btn" id="modalConfirm">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   // ---- Config ---------------------------------------------------------
@@ -222,6 +249,94 @@
   }
 
   function uid(){ return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+  // ---- Dialogs -------------------------------------------------------
+  // In-page replacements for prompt/confirm/alert, so every popup is
+  // themed. openModal resolves to a {field: value} map, or null on cancel.
+  const $modal = document.getElementById('modal');
+  const $modalTitle = document.getElementById('modalTitle');
+  const $modalMessage = document.getElementById('modalMessage');
+  const $modalFields = document.getElementById('modalFields');
+  const $modalCancel = document.getElementById('modalCancel');
+  const $modalConfirm = document.getElementById('modalConfirm');
+  let modalResolve = null;
+  let modalReturnFocus = null;
+
+  function closeModal(result){
+    if(!modalResolve) return;
+    const resolve = modalResolve;
+    modalResolve = null;
+    $modal.classList.add('hidden');
+    document.removeEventListener('keydown', modalKeydown, true);
+    if(modalReturnFocus && document.contains(modalReturnFocus)) modalReturnFocus.focus();
+    modalReturnFocus = null;
+    resolve(result);
+  }
+
+  function submitModal(){
+    const values = {};
+    $modalFields.querySelectorAll('[data-field]').forEach(el => { values[el.dataset.field] = el.value; });
+    closeModal(values);
+  }
+
+  function modalKeydown(e){
+    if(e.key === 'Escape'){ e.preventDefault(); closeModal(null); }
+    else if(e.key === 'Enter' && e.target.tagName !== 'TEXTAREA'){ e.preventDefault(); submitModal(); }
+  }
+
+  function openModal({title, message='', fields=[], confirmLabel='Save', cancelLabel='Cancel', danger=false}){
+    modalReturnFocus = document.activeElement;
+    $modalTitle.textContent = title;
+    $modalMessage.textContent = message;
+    $modalMessage.classList.toggle('hidden', !message);
+    $modalFields.innerHTML = '';
+    $modalFields.classList.toggle('hidden', fields.length === 0);
+    fields.forEach(f => {
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-field';
+      const control = document.createElement(f.multiline ? 'textarea' : 'input');
+      if(!f.multiline) control.type = 'text';
+      control.id = 'modalField_' + f.name;
+      control.dataset.field = f.name;
+      control.value = f.value || '';
+      if(f.placeholder) control.placeholder = f.placeholder;
+      if(f.maxLength) control.maxLength = f.maxLength;
+      const label = document.createElement('label');
+      label.setAttribute('for', control.id);
+      label.textContent = f.label;
+      wrap.appendChild(label);
+      wrap.appendChild(control);
+      $modalFields.appendChild(wrap);
+    });
+    $modalConfirm.textContent = confirmLabel;
+    $modalConfirm.classList.toggle('btn-danger', danger);
+    $modalCancel.textContent = cancelLabel || '';
+    $modalCancel.classList.toggle('hidden', !cancelLabel);
+    $modal.classList.remove('hidden');
+    document.addEventListener('keydown', modalKeydown, true);
+
+    const first = $modalFields.querySelector('[data-field]');
+    if(first){
+      first.focus();
+      const end = first.value.length;
+      try{ first.setSelectionRange(end, end); } catch(e){}
+    } else {
+      $modalConfirm.focus();
+    }
+    return new Promise(resolve => { modalResolve = resolve; });
+  }
+
+  async function confirmDialog(opts){
+    return (await openModal({ ...opts, fields: [] })) !== null;
+  }
+
+  function alertDialog(title, message){
+    return openModal({ title, message, confirmLabel: 'OK', cancelLabel: null });
+  }
+
+  $modalConfirm.addEventListener('click', submitModal);
+  $modalCancel.addEventListener('click', ()=> closeModal(null));
+  $modal.addEventListener('mousedown', e => { if(e.target === $modal) closeModal(null); });
 
   function mapRow(row){
     return {
@@ -397,19 +512,25 @@
         col.classList.add('dragover');
       });
       col.addEventListener('dragleave', ()=> col.classList.remove('dragover'));
-      col.addEventListener('drop', e=>{
+      col.addEventListener('drop', async e=>{
         e.preventDefault();
         col.classList.remove('dragover');
         if(!dragId) return;
         const task = state.tasks.find(t=>t.id===dragId);
-        if(task && task.status !== st.id){
-          const patch = { status: st.id };
-          if(st.id === 'blocked' && !task.notes){
-            const reason = prompt(`Why is "${task.title}" blocked?`);
-            if(reason && reason.trim()) patch.notes = reason.trim();
-          }
-          applyLocalPatch(task, patch);
+        if(!task || task.status === st.id) return;
+        const patch = { status: st.id };
+        if(st.id === 'blocked' && !task.notes){
+          const result = await openModal({
+            title: "What's blocking this?",
+            message: task.title,
+            fields: [{name:'notes', label:'Blocked because', value:'', multiline:true,
+                      placeholder:'Waiting on…'}],
+            confirmLabel: 'Save & move',
+            cancelLabel: 'Move without a note'
+          });
+          if(result && result.notes.trim()) patch.notes = result.notes.trim();
         }
+        applyLocalPatch(task, patch);
       });
 
       $board.appendChild(col);
@@ -464,42 +585,64 @@
 
     card.querySelector('[data-act="note"]').addEventListener('click', ()=> editNote(t));
 
-    card.querySelector('[data-act="del"]').addEventListener('click', ()=>{
+    card.querySelector('[data-act="del"]').addEventListener('click', async ()=>{
       const kidCount = children(t.id).length;
-      const msg = kidCount>0
-        ? `Delete "${t.title}" and its ${kidCount} sub-task${kidCount>1?'s':''}?`
-        : `Delete "${t.title}"?`;
-      if(confirm(msg)){
-        const idsToRemove = new Set([t.id, ...children(t.id).map(k=>k.id)]);
-        state.tasks = state.tasks.filter(x=>!idsToRemove.has(x.id));
-        if(collapsedParents.delete(t.id)) localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedParents]));
-        render();
-        removeTask(t.id);
-        showToast('Deleted');
-      }
+      const ok = await confirmDialog({
+        title: 'Delete this task?',
+        message: kidCount>0
+          ? `"${t.title}" and its ${kidCount} sub-task${kidCount>1?'s':''} will be removed from the board.`
+          : `"${t.title}" will be removed from the board.`,
+        confirmLabel: 'Delete',
+        danger: true
+      });
+      if(!ok) return;
+      const idsToRemove = new Set([t.id, ...children(t.id).map(k=>k.id)]);
+      state.tasks = state.tasks.filter(x=>!idsToRemove.has(x.id));
+      if(collapsedParents.delete(t.id)) localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedParents]));
+      render();
+      removeTask(t.id);
+      showToast('Deleted');
     });
-    card.querySelector('[data-act="edit"]').addEventListener('click', ()=>{
-      const newTitle = prompt('Edit title:', t.title);
-      if(newTitle===null) return;
-      const newNotes = prompt('Edit notes (optional):', t.notes||'');
+    card.querySelector('[data-act="edit"]').addEventListener('click', async ()=>{
+      const result = await openModal({
+        title: 'Edit task',
+        fields: [
+          {name:'title', label:'Title', value:t.title, maxLength:140},
+          {name:'notes', label:'Notes', value:t.notes, multiline:true,
+           placeholder:'Context, blockers, links — anything worth recalling later'}
+        ]
+      });
+      if(!result) return;
       applyLocalPatch(t, {
-        title: newTitle.trim() || t.title,
-        notes: newNotes===null ? t.notes : newNotes
+        title: result.title.trim() || t.title,
+        notes: result.notes
       });
     });
 
     return card;
   }
 
-  function editNote(t){
-    const newNotes = prompt('Note:', t.notes || '');
-    if(newNotes===null) return;
-    applyLocalPatch(t, { notes: newNotes });
+  async function editNote(t){
+    const result = await openModal({
+      title: t.notes ? 'Edit note' : 'Add a note',
+      message: t.title,
+      fields: [{name:'notes', label:'Note', value:t.notes, multiline:true,
+                placeholder:'Why is this parked? What would unblock it?'}]
+    });
+    if(!result) return;
+    applyLocalPatch(t, { notes: result.notes });
   }
 
-  function addSubtask(parentTask){
-    const title = prompt(`Sub-task of "${parentTask.title}":`);
-    if(title===null || !title.trim()) return;
+  async function addSubtask(parentTask){
+    const result = await openModal({
+      title: 'Add sub-task',
+      message: `Under "${parentTask.title}"`,
+      fields: [{name:'title', label:'Sub-task title', value:'', maxLength:140,
+                placeholder:'e.g. Draft the outline'}],
+      confirmLabel: 'Add'
+    });
+    if(!result || !result.title.trim()) return;
+    const title = result.title;
     const now = new Date().toISOString();
     const task = {
       id: uid(), title: title.trim(), area: parentTask.area, status: 'backlog',
@@ -575,7 +718,7 @@
         showToast('Imported');
       } catch(err){
         $statusPill.textContent = 'synced';
-        alert('Could not import that file: ' + err.message);
+        alertDialog('Import failed', 'Could not read that file: ' + err.message);
       }
     };
     reader.readAsText(file);
