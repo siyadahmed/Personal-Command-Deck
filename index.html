@@ -73,6 +73,11 @@
   .col-head-title{font-family:'DM Mono',ui-monospace,monospace;font-size:11px;font-weight:500;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);}
   .col-count{font-family:'DM Mono',ui-monospace,monospace;font-size:11px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:0 7px;}
   .cards{display:flex;flex-direction:column;gap:8px;flex:1;min-height:60px;}
+  /* A parent and its sub-tasks read as one block: tight 5px inside the
+     group, the column's 8px between groups, and a hairline rail down
+     the indent so the nesting is visible without reading any labels. */
+  .group{display:flex;flex-direction:column;gap:5px;}
+  .subtree{display:flex;flex-direction:column;gap:5px;margin-left:9px;padding-left:11px;border-left:1px solid var(--line);}
   .empty{color:var(--muted-2);font-size:12px;text-align:center;padding:20px 6px;border:1px dashed var(--line);border-radius:8px;}
 
   .card{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--other);border-radius:8px;padding:10px 10px 8px;cursor:grab;}
@@ -84,9 +89,10 @@
   .card-notes:hover{background:var(--panel);}
   .card-notes.empty{color:var(--muted-2);font-style:italic;border:1px dashed var(--line);text-align:center;padding:4px 6px;margin-left:0;margin-right:0;}
   .card-notes.empty:hover{color:var(--muted);border-color:var(--muted-2);background:none;}
-  .card-progress{display:flex;align-items:flex-start;gap:6px;width:100%;margin:0 0 8px;background:none;border:none;padding:0;cursor:pointer;text-align:left;font:inherit;}
-  .card-progress:hover .card-progress-label{color:var(--text);}
-  .card-progress-chevron{color:var(--muted-2);font-size:10px;line-height:1.6;flex:none;}
+  .card-progress{display:flex;align-items:flex-start;gap:6px;width:100%;margin:0 -4px 8px;padding:3px 4px;background:none;border:none;border-radius:5px;cursor:pointer;text-align:left;font:inherit;}
+  .card-progress:hover{background:var(--panel);}
+  .card-progress:hover .card-progress-label,.card-progress:hover .card-progress-chevron{color:var(--text);}
+  .card-progress-chevron{color:var(--muted-2);font-size:11px;line-height:1.45;flex:none;}
   .card-progress-body{flex:1;min-width:0;}
   .card-progress-bar{display:block;height:4px;border-radius:3px;background:var(--track);overflow:hidden;}
   .card-progress-fill{display:block;height:100%;background:var(--muted);border-radius:3px;}
@@ -488,23 +494,52 @@
       col.className = 'col';
       col.dataset.status = st.id;
 
-      const tasks = state.tasks.filter(t => t.status===st.id
+      const visible = state.tasks.filter(t => t.status===st.id
         && (!activeAreaFilter || t.area===activeAreaFilter)
         && !(t.parentId && collapsedParents.has(t.parentId)));
 
       col.innerHTML = `<div class="col-head">
           <div class="col-head-title">${st.label}</div>
-          <div class="col-count">${tasks.length}</div>
+          <div class="col-count">${visible.length}</div>
         </div>
         <div class="cards" data-status="${st.id}"></div>`;
 
       const cardsWrap = col.querySelector('.cards');
-      if(tasks.length===0){
+      if(visible.length===0){
         cardsWrap.innerHTML = `<div class="empty">Nothing here</div>`;
       } else {
-        tasks.sort((a,b)=> b.updatedAt.localeCompare(a.updatedAt)).forEach(t=>{
-          cardsWrap.appendChild(renderCard(t));
+        // Sorting purely by recency scattered sub-tasks away from their
+        // parent — usually above it, since children are created later.
+        // Group each parent with its own sub-tasks instead. Sub-tasks whose
+        // parent sits in a different column have nothing to nest under, so
+        // they collect at the bottom and keep their breadcrumb.
+        const byRecent = (a,b)=> b.updatedAt.localeCompare(a.updatedAt);
+        const idsHere = new Set(visible.map(t=>t.id));
+        const kidsOf = new Map();
+        visible.forEach(t=>{
+          if(t.parentId && idsHere.has(t.parentId)){
+            if(!kidsOf.has(t.parentId)) kidsOf.set(t.parentId, []);
+            kidsOf.get(t.parentId).push(t);
+          }
         });
+
+        visible.filter(t=>!t.parentId).sort(byRecent).forEach(top=>{
+          const group = document.createElement('div');
+          group.className = 'group';
+          group.appendChild(renderCard(top));
+          const kids = (kidsOf.get(top.id) || []).sort(byRecent);
+          if(kids.length){
+            const subtree = document.createElement('div');
+            subtree.className = 'subtree';
+            kids.forEach(k => subtree.appendChild(renderCard(k, {nested:true})));
+            group.appendChild(subtree);
+          }
+          cardsWrap.appendChild(group);
+        });
+
+        visible.filter(t => t.parentId && !idsHere.has(t.parentId))
+          .sort(byRecent)
+          .forEach(t => cardsWrap.appendChild(renderCard(t)));
       }
 
       col.addEventListener('dragover', e=>{
@@ -537,19 +572,23 @@
     });
   }
 
-  function renderCard(t){
+  function renderCard(t, opts){
+    const nested = !!(opts && opts.nested);
     const isSubtask = !!t.parentId;
     const parent = isSubtask ? state.tasks.find(p=>p.id===t.parentId) : null;
     const kids = isSubtask ? [] : children(t.id);
     const doneKids = kids.filter(k=>k.status==='done').length;
     const collapsed = collapsedParents.has(t.id);
+    // Nested cards sit under their parent behind the rail, so the
+    // breadcrumb would just repeat what the indent already says.
+    const showBreadcrumb = isSubtask && !nested;
 
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card' + (nested ? ' card-nested' : '');
     card.style.borderLeftColor = AREA_DEFS[t.area] ? AREA_DEFS[t.area].color : 'var(--other)';
     card.draggable = true;
     card.innerHTML = `
-      ${isSubtask ? `<p class="card-parent">↳ ${parent ? escapeHtml(parent.title) : 'parent task'}</p>` : ''}
+      ${showBreadcrumb ? `<p class="card-parent">↳ ${parent ? escapeHtml(parent.title) : 'parent task'}</p>` : ''}
       <p class="card-title"></p>
       <p class="card-notes${t.notes ? '' : ' empty'}" data-act="note" title="${t.notes ? 'Edit note' : 'Add a note'}"></p>
       ${kids.length ? `
