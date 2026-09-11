@@ -129,15 +129,22 @@
     .quickadd{flex:0 0 auto;}
   }
 
-  .gate{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100;}
-  .gate-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:28px 26px;width:100%;max-width:280px;text-align:center;}
-  .gate-box h2{font-family:'Cormorant Garamond',Georgia,serif;font-size:26px;font-weight:700;margin:0 0 4px;}
-  .gate-box p{color:var(--muted);font-size:12px;margin:0 0 16px;}
-  .gate-box input{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:10px 12px;font-size:14px;font-family:'DM Mono',ui-monospace,monospace;text-align:center;letter-spacing:.1em;}
+  .gate{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;z-index:100;}
+  .gate-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:28px 26px;width:100%;max-width:330px;text-align:center;}
+  .gate-box h2{font-family:'Cormorant Garamond',Georgia,serif;font-size:26px;font-weight:700;margin:0 0 6px;}
+  .gate-box p{color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 16px;}
+  .gate-box input{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:10px 12px;font-size:14px;font-family:'Spectral',Georgia,serif;}
+  .gate-box input::placeholder{color:var(--muted-2);opacity:.8;}
   .gate-box input:focus{outline:2px solid var(--consulting);outline-offset:1px;border-color:var(--consulting);}
   .gate-box .btn{width:100%;margin-top:10px;}
-  .gate-error{color:var(--youtube);font-size:12px;margin-top:10px;min-height:14px;}
+  .gate-box .btn[disabled]{opacity:.6;cursor:default;}
+  .gate-error{color:var(--youtube);font-size:12px;margin-top:10px;min-height:14px;line-height:1.4;}
+  .gate-sent{font-size:26px;color:var(--hobby);margin-bottom:4px;}
   .gate.shake .gate-box{animation:shake .3s;}
+
+  .header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;}
+  .header-right select{padding:5px 8px;font-size:12px;}
+  .btn-sm{padding:5px 10px;font-size:12px;}
   @keyframes shake{25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
   .hidden{display:none !important;}
   @media (prefers-reduced-motion: reduce){
@@ -149,10 +156,13 @@
 
 <div class="gate" id="gate">
   <div class="gate-box">
-    <h2>Command Deck</h2>
-    <p>Enter passcode to continue</p>
-    <input type="password" id="gateInput" autocomplete="off" maxlength="40">
-    <button class="btn" id="gateBtn">Unlock</button>
+    <div class="gate-sent hidden" id="gateSent">✓</div>
+    <h2 id="gateTitle">Command Deck</h2>
+    <p id="gateCopy">Sign in with your email and we'll send you a link.</p>
+    <form id="gateForm">
+      <input type="email" id="gateInput" autocomplete="email" placeholder="you@example.com" required>
+      <button class="btn" id="gateBtn" type="submit">Email me a link</button>
+    </form>
     <div class="gate-error" id="gateError"></div>
   </div>
 </div>
@@ -163,7 +173,11 @@
       <h1>Command Deck</h1>
       <p class="sub">Every plan, one board. Synced live across your devices.</p>
     </div>
-    <div class="status-pill" id="statusPill">connecting…</div>
+    <div class="header-right">
+      <select id="boardSelect" class="hidden" aria-label="Choose board"></select>
+      <div class="status-pill" id="statusPill">connecting…</div>
+      <button class="btn btn-ghost btn-sm" id="signOutBtn" type="button">Sign out</button>
+    </div>
   </header>
 
   <div class="meter">
@@ -206,13 +220,10 @@
   // ---- Config ---------------------------------------------------------
   const SUPABASE_URL = 'https://iurmlkqlasufztgtrzpf.supabase.co';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1cm1sa3FsYXN1Znp0Z3RyenBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTM2MTAsImV4cCI6MjEwMjUyOTYxMH0.BGDtHiW9FnxnhiuyHe9rFQNqNbFAIxWx3YWP4coDjI8';
-  // Cosmetic gate only — not real security. The anon key above is public
-  // (visible in page source) and the database enforces access via RLS, not
-  // this passcode. Change it before deploying, and don't put sensitive data
-  // in this board.
-  const PASSCODE = 'Dan33n2018';
-  const GATE_KEY = 'command-deck-gate-ok';
-
+  // The anon key is public by design — it identifies the project, it does
+  // not grant access. Access is decided by Postgres: RLS only returns rows
+  // on boards you are a member of, and you become a member by signing in
+  // through a magic link sent to your email.
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   // ---- Board data -------------------------------------------------------
@@ -233,10 +244,14 @@
   ];
 
   const COLLAPSE_KEY = 'command-deck-collapsed';
+  const BOARD_KEY = 'command-deck-board';
 
   let state = { tasks: [] };
   let activeAreaFilter = null;
   let dragId = null;
+  let currentUser = null;
+  let boards = [];
+  let currentBoardId = null;
   let collapsedParents = new Set();
   try{ collapsedParents = new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]')); } catch(e){}
 
@@ -352,6 +367,7 @@
       status: row.status,
       notes: row.notes || '',
       parentId: row.parent_id || null,
+      boardId: row.board_id || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
@@ -370,8 +386,14 @@
 
   // ---- Remote load + writes ---------------------------------------------
   async function load(){
+    if(!currentBoardId){
+      state.tasks = [];
+      $statusPill.textContent = 'no board';
+      render();
+      return;
+    }
     $statusPill.textContent = 'connecting…';
-    const { data, error } = await sb.from('tasks').select('*');
+    const { data, error } = await sb.from('tasks').select('*').eq('board_id', currentBoardId);
     if(error){
       $statusPill.textContent = 'sync failed';
       showToast('Could not load board: ' + error.message);
@@ -379,7 +401,6 @@
     }
     state.tasks = data.map(mapRow);
     $statusPill.textContent = 'synced';
-    populateAreaSelect();
     render();
     subscribeRealtime();
   }
@@ -387,7 +408,8 @@
   async function insertTask(task){
     const { error } = await sb.from('tasks').insert({
       id: task.id, title: task.title, area: task.area,
-      status: task.status, notes: task.notes, parent_id: task.parentId || null
+      status: task.status, notes: task.notes, parent_id: task.parentId || null,
+      board_id: currentBoardId, created_by: currentUser ? currentUser.id : null
     });
     if(error){
       state.tasks = state.tasks.filter(t=>t.id!==task.id);
@@ -425,13 +447,24 @@
     render();
   }
 
+  let taskChannel = null;
+
   function subscribeRealtime(){
-    sb.channel('tasks-sync')
+    if(taskChannel){ sb.removeChannel(taskChannel); taskChannel = null; }
+    const boardAtSubscribe = currentBoardId;
+
+    // Deliberately unfiltered server-side. A postgres_changes filter on
+    // board_id would silently drop DELETEs: Postgres only ships the primary
+    // key in the old record unless the table is REPLICA IDENTITY FULL, so
+    // the filter never matches and deleted cards linger. RLS already limits
+    // events to boards you belong to; narrowing to the open board is a
+    // cheap client-side check.
+    taskChannel = sb.channel('tasks-' + boardAtSubscribe)
       .on('postgres_changes', { event:'*', schema:'public', table:'tasks' }, payload => {
-        if(payload.eventType === 'INSERT' || payload.eventType === 'UPDATE'){
-          upsertLocal(payload.new);
-        } else if(payload.eventType === 'DELETE'){
+        if(payload.eventType === 'DELETE'){
           removeLocal(payload.old.id);
+        } else if(payload.new && payload.new.board_id === currentBoardId){
+          upsertLocal(payload.new);
         }
       })
       .subscribe(status => {
@@ -742,12 +775,16 @@
       try{
         const parsed = JSON.parse(reader.result);
         if(!parsed.tasks || !Array.isArray(parsed.tasks)) throw new Error('bad format');
+        if(!currentBoardId) throw new Error('no board open');
         $statusPill.textContent = 'importing…';
-        const { error: delErr } = await sb.from('tasks').delete().neq('id', '');
+        // Scoped to the open board — import replaces this board, never the
+        // other boards you're a member of.
+        const { error: delErr } = await sb.from('tasks').delete().eq('board_id', currentBoardId);
         if(delErr) throw delErr;
         const rows = parsed.tasks.map(t => ({
           id: t.id || uid(), title: t.title, area: t.area,
-          status: t.status, notes: t.notes || '', parent_id: t.parentId || null
+          status: t.status, notes: t.notes || '', parent_id: t.parentId || null,
+          board_id: currentBoardId, created_by: currentUser ? currentUser.id : null
         })).sort((a,b) => (a.parent_id ? 1 : 0) - (b.parent_id ? 1 : 0));
         if(rows.length){
           const { error: insErr } = await sb.from('tasks').insert(rows);
@@ -764,40 +801,118 @@
     e.target.value = '';
   });
 
-  // ---- Passcode gate ------------------------------------------------
+  // ---- Sign in (magic link) -------------------------------------------
   const $gate = document.getElementById('gate');
   const $app = document.getElementById('app');
+  const $gateForm = document.getElementById('gateForm');
   const $gateInput = document.getElementById('gateInput');
   const $gateBtn = document.getElementById('gateBtn');
   const $gateError = document.getElementById('gateError');
+  const $gateTitle = document.getElementById('gateTitle');
+  const $gateCopy = document.getElementById('gateCopy');
+  const $gateSent = document.getElementById('gateSent');
+  const $boardSelect = document.getElementById('boardSelect');
+  const $signOutBtn = document.getElementById('signOutBtn');
 
-  function unlock(){
+  function gateError(msg){
+    $gateError.textContent = msg;
+    $gate.classList.add('shake');
+    setTimeout(()=>$gate.classList.remove('shake'), 300);
+  }
+
+  $gateForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = $gateInput.value.trim();
+    if(!email) return;
+    $gateError.textContent = '';
+    $gateBtn.disabled = true;
+    $gateBtn.textContent = 'Sending…';
+
+    // Must exactly match an entry in Supabase → Authentication →
+    // URL Configuration → Redirect URLs, or the link lands on the site root.
+    const redirectTo = window.location.origin + window.location.pathname;
+    const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
+
+    $gateBtn.disabled = false;
+    $gateBtn.textContent = 'Email me a link';
+    if(error){ gateError(error.message); return; }
+
+    $gateSent.classList.remove('hidden');
+    $gateTitle.textContent = 'Check your inbox';
+    $gateCopy.innerHTML = 'We sent a link to <strong></strong>. Opening it signs you in — it expires in an hour.';
+    $gateCopy.querySelector('strong').textContent = email;
+    $gateForm.classList.add('hidden');
+  });
+
+  // ---- Boards ----------------------------------------------------------
+  async function loadBoards(){
+    const { data, error } = await sb.from('boards').select('*').order('created_at');
+    if(error){
+      showToast('Could not load your boards: ' + error.message);
+      return;
+    }
+    boards = data || [];
+    const saved = localStorage.getItem(BOARD_KEY);
+    currentBoardId = boards.some(b => b.id === saved) ? saved
+                   : (boards[0] ? boards[0].id : null);
+    if(currentBoardId) localStorage.setItem(BOARD_KEY, currentBoardId);
+
+    $boardSelect.innerHTML = boards.map(b =>
+      `<option value="${b.id}"></option>`).join('');
+    [...$boardSelect.options].forEach((opt, i) => { opt.textContent = boards[i].name; });
+    $boardSelect.value = currentBoardId || '';
+    // A switcher with one option is just clutter — it appears when there's
+    // somewhere to switch to.
+    $boardSelect.classList.toggle('hidden', boards.length < 2);
+  }
+
+  $boardSelect.addEventListener('change', async ()=>{
+    currentBoardId = $boardSelect.value;
+    localStorage.setItem(BOARD_KEY, currentBoardId);
+    activeAreaFilter = null;
+    await load();
+  });
+
+  $signOutBtn.addEventListener('click', async ()=>{
+    if(taskChannel){ sb.removeChannel(taskChannel); taskChannel = null; }
+    await sb.auth.signOut();
+    localStorage.removeItem(BOARD_KEY);
+    window.location.reload();
+  });
+
+  // ---- Session ---------------------------------------------------------
+  let appStarted = false;
+
+  async function enterApp(session){
+    if(appStarted) return;
+    appStarted = true;
+    currentUser = session.user;
     $gate.classList.add('hidden');
     $app.classList.remove('hidden');
-    load();
-  }
-
-  function tryPasscode(){
-    if($gateInput.value === PASSCODE){
-      sessionStorage.setItem(GATE_KEY, '1');
-      unlock();
-    } else {
-      $gateError.textContent = 'Incorrect passcode';
-      $gate.classList.add('shake');
-      setTimeout(()=>$gate.classList.remove('shake'), 300);
-      $gateInput.value = '';
-      $gateInput.focus();
+    // Strip the magic-link tokens out of the address bar once consumed.
+    history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    populateAreaSelect();
+    await loadBoards();
+    if(!currentBoardId){
+      $statusPill.textContent = 'no board';
+      showToast('Your account has no board yet — reload in a moment.');
+      return;
     }
+    await load();
   }
 
-  $gateBtn.addEventListener('click', tryPasscode);
-  $gateInput.addEventListener('keydown', e=>{ if(e.key==='Enter') tryPasscode(); });
+  // Fires on first load with a restored session, and again when the magic
+  // link is opened; enterApp guards against running twice.
+  sb.auth.onAuthStateChange((event, session) => {
+    if(session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) enterApp(session);
+    if(event === 'SIGNED_OUT') window.location.reload();
+  });
 
-  if(sessionStorage.getItem(GATE_KEY) === '1'){
-    unlock();
-  } else {
-    $gateInput.focus();
-  }
+  (async function boot(){
+    const { data:{ session } } = await sb.auth.getSession();
+    if(session) enterApp(session);
+    else $gateInput.focus();
+  })();
 })();
 </script>
 </body>

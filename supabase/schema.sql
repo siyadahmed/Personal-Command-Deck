@@ -1,4 +1,11 @@
 -- Command Deck — tasks table
+--
+-- HISTORICAL. This is the original single-board schema, where one shared
+-- passcode fronted a table the public anon key could read and write.
+-- It is superseded by supabase/migrations/001 and 002, which move tasks
+-- onto boards with per-member access. Kept for reference; run the
+-- migrations instead.
+--
 -- Run this once in the Supabase SQL Editor:
 -- https://supabase.com/dashboard/project/iurmlkqlasufztgtrzpf/sql/new
 
