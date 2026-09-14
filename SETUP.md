@@ -53,9 +53,9 @@ out of your own sign-ins while testing.
 
 On the **URL Configuration** page:
 
-- **Site URL**: `https://siyadahmed.github.io/Personal-Command-Deck/`
+- **Site URL**: `https://siyadahmed.github.io/Pinboard/`
 - **Redirect URLs**: add both of
-  - `https://siyadahmed.github.io/Personal-Command-Deck/**`
+  - `https://siyadahmed.github.io/Pinboard/**`
   - `http://localhost:8744/index.html` (local testing)
 
 A magic link whose redirect isn't on this list silently falls back to the
