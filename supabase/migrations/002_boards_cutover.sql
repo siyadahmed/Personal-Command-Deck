@@ -1,4 +1,4 @@
--- Command Deck — Phase 2: CUTOVER (breaking — read before running)
+-- Pinboard — Phase 2: CUTOVER (breaking — read before running)
 --
 -- This is the step that makes access real. It revokes the public anon
 -- read/write on tasks and replaces it with per-board membership.

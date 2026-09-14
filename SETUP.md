@@ -1,4 +1,4 @@
-# Command Deck — setup runbook
+# Pinboard — setup runbook
 
 Everything here is done in the Supabase dashboard or your Google account.
 Direct links are for project `iurmlkqlasufztgtrzpf`.
@@ -39,7 +39,7 @@ Then on the **SMTP** page above, enable custom SMTP:
 | Username | your Gmail address |
 | Password | the 16-character App Password |
 | Sender email | the same Gmail address |
-| Sender name | `Command Deck` |
+| Sender name | `Pinboard` |
 
 Sender email has to be that same Gmail address. Gmail rewrites `From` to
 whichever account authenticated, so anything else either fails or silently

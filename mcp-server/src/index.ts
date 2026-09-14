@@ -100,7 +100,7 @@ function jsonResult(data: unknown) {
 }
 
 function createServer(env: WorkerEnv) {
-	const server = new McpServer({ name: "Kanban Board (Command Deck)", version: "1.0.0" });
+	const server = new McpServer({ name: "Pinboard", version: "1.0.0" });
 
 	server.registerTool(
 		"list_tasks",
@@ -261,23 +261,27 @@ const mcpApiHandler: FetchHandler = {
 function loginPage(actionUrl: string, clientName: string | undefined, error?: string): Response {
 	const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize — Command Deck</title>
+<title>Authorize — Pinboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@700&family=Spectral:wght@400;600&family=DM+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
-  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-    background:#11141b;color:#e9ebf1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
-  .box{background:#181c26;border:1px solid #2a3040;border-radius:10px;padding:28px 26px;width:100%;max-width:300px;text-align:center;}
-  h1{font-size:17px;margin:0 0 4px;}
-  p{color:#8a91a6;font-size:13px;margin:0 0 16px;}
-  input{width:100%;box-sizing:border-box;background:#1f2430;border:1px solid #2a3040;border-radius:7px;
-    color:#e9ebf1;padding:10px 12px;font-size:14px;text-align:center;}
-  input:focus{outline:none;border-color:#5c6376;}
-  button{width:100%;margin-top:10px;background:#e9ebf1;color:#11141b;border:none;border-radius:7px;
-    padding:9px 16px;font-weight:600;font-size:13px;cursor:pointer;}
-  .err{color:#ef5b5b;font-size:12px;margin-top:10px;min-height:14px;}
+  /* Same Chart Room tokens as the board itself. */
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;
+    background:#ecdfba;color:#1c3a52;font-family:'Spectral',Georgia,serif;}
+  .box{background:#e4d5a9;border:1px solid #c3b284;border-radius:10px;padding:28px 26px;width:100%;max-width:320px;text-align:center;}
+  h1{font-family:'Cormorant Garamond',Georgia,serif;font-size:28px;font-weight:700;margin:0 0 6px;}
+  p{color:#3f5a67;font-size:13px;line-height:1.5;margin:0 0 16px;}
+  input{width:100%;box-sizing:border-box;background:#f2e8c8;border:1px solid #c3b284;border-radius:7px;
+    color:#1c3a52;padding:10px 12px;font-size:14px;text-align:center;font-family:'DM Mono',ui-monospace,monospace;letter-spacing:.08em;}
+  input:focus{outline:2px solid #2f5d7a;outline-offset:1px;border-color:#2f5d7a;}
+  button{width:100%;margin-top:10px;background:#1c3a52;color:#ecdfba;border:none;border-radius:7px;
+    padding:9px 16px;font-weight:600;font-size:13px;cursor:pointer;font-family:'Spectral',Georgia,serif;}
+  button:focus-visible{outline:2px solid #2f5d7a;outline-offset:2px;}
+  .err{color:#a8402f;font-size:12px;margin-top:10px;min-height:14px;}
 </style></head>
 <body>
   <div class="box">
-    <h1>Command Deck</h1>
+    <h1>Pinboard</h1>
     <p>${clientName ? `Allow "${escapeHtml(clientName)}" to manage your tasks?` : "Enter your password to continue"}</p>
     <form method="POST" action="${actionUrl}">
       <input type="password" name="password" autocomplete="current-password" autofocus>

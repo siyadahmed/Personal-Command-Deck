@@ -1,7 +1,7 @@
-# Kanban Board MCP Server
+# Pinboard MCP Server
 
 A remote MCP server that lets Claude (Claude.ai, Cowork, Claude Desktop, Claude Code)
-manage tasks on the Command Deck board directly — add tasks, add sub-tasks, move
+manage tasks on your Pinboard directly — add tasks, add sub-tasks, move
 things between columns, and list what's there.
 
 It's purpose-built for this board only: five tools (`list_tasks`, `add_task`,
@@ -68,7 +68,7 @@ this way before connecting Claude.ai for real.
 ## Connecting it to Claude.ai / Cowork
 
 1. In Claude.ai, go to **Settings → Connectors → Add custom connector**.
-2. Name: `Kanban Board` (or anything you like).
+2. Name: `Pinboard` (or anything you like).
 3. URL: `https://kanban-mcp.<your-subdomain>.workers.dev/mcp`
 4. Claude.ai will discover that this is an OAuth-protected server automatically
    (via the `/.well-known/oauth-protected-resource` and
@@ -92,6 +92,6 @@ you ever add a new area or column.
 ## Changing the login page
 
 `loginPage()` in `src/index.ts` renders the `/authorize` screen. It's a
-single password field styled to loosely match the board's dark UI — nothing
+single password field in the same Chart Room styling as the board — nothing
 fancy, since it's shown once per Claude.ai connection (tokens refresh
 automatically after that).

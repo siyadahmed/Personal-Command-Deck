@@ -1,4 +1,4 @@
--- Command Deck — Phase 1: boards + membership (ADDITIVE, non-breaking)
+-- Pinboard — Phase 1: boards + membership (ADDITIVE, non-breaking)
 --
 -- Safe to run on the live board. It only ADDS tables, columns and helpers.
 -- The existing "anon full access" policy is deliberately left in place, so

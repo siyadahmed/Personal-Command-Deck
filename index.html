@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Command Deck</title>
+<title>Pinboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Spectral:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -157,7 +157,7 @@
 <div class="gate" id="gate">
   <div class="gate-box">
     <div class="gate-sent hidden" id="gateSent">✓</div>
-    <h2 id="gateTitle">Command Deck</h2>
+    <h2 id="gateTitle">Pinboard</h2>
     <p id="gateCopy">Sign in with your email and we'll send you a link.</p>
     <form id="gateForm">
       <input type="email" id="gateInput" autocomplete="email" placeholder="you@example.com" required>
@@ -170,7 +170,7 @@
 <div class="wrap hidden" id="app">
   <header>
     <div>
-      <h1>Command Deck</h1>
+      <h1>Pinboard</h1>
       <p class="sub">Every plan, one board. Synced live across your devices.</p>
     </div>
     <div class="header-right">
@@ -243,8 +243,8 @@
     {id:'done',     label:'Done'}
   ];
 
-  const COLLAPSE_KEY = 'command-deck-collapsed';
-  const BOARD_KEY = 'command-deck-board';
+  const COLLAPSE_KEY = 'pinboard-collapsed';
+  const BOARD_KEY = 'pinboard-board';
 
   let state = { tasks: [] };
   let activeAreaFilter = null;
@@ -253,7 +253,17 @@
   let boards = [];
   let currentBoardId = null;
   let collapsedParents = new Set();
-  try{ collapsedParents = new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]')); } catch(e){}
+  try{
+    // Carry collapse state across the rename, rather than every parent
+    // silently springing open the first time the renamed build loads.
+    const legacyCollapse = localStorage.getItem('command-deck-collapsed');
+    if(legacyCollapse !== null && localStorage.getItem(COLLAPSE_KEY) === null){
+      localStorage.setItem(COLLAPSE_KEY, legacyCollapse);
+    }
+    localStorage.removeItem('command-deck-collapsed');
+    localStorage.removeItem('command-deck-board');
+    collapsedParents = new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]'));
+  } catch(e){}
 
   const $board = document.getElementById('board');
   const $meterBar = document.getElementById('meterBar');
@@ -758,7 +768,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'command-deck-backup-' + new Date().toISOString().slice(0,10) + '.json';
+    a.download = 'pinboard-backup-' + new Date().toISOString().slice(0,10) + '.json';
     a.click();
     URL.revokeObjectURL(url);
     showToast('Exported');
