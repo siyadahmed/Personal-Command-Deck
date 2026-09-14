@@ -18,9 +18,14 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
+	/**
+	 * Secrets, set with `npx wrangler secret put <NAME>` and never committed:
+	 *   OWNER_PASSWORD       password on the /authorize screen
+	 *   SUPABASE_SECRET_KEY  Supabase secret key (sb_secret_…), bypasses RLS
+	 *   MCP_USER_EMAIL       the Pinboard account this connector acts as
+	 */
 	"vars": {
-		"SUPABASE_URL": "https://iurmlkqlasufztgtrzpf.supabase.co",
-		"SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1cm1sa3FsYXN1Znp0Z3RyenBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTM2MTAsImV4cCI6MjEwMjUyOTYxMH0.BGDtHiW9FnxnhiuyHe9rFQNqNbFAIxWx3YWP4coDjI8"
+		"SUPABASE_URL": "https://iurmlkqlasufztgtrzpf.supabase.co"
 	},
 	/**
 	 * OAuth token/grant storage for @cloudflare/workers-oauth-provider.

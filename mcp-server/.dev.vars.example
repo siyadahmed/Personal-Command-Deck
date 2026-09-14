@@ -1,1 +1,3 @@
 OWNER_PASSWORD=your-password-here
+SUPABASE_SECRET_KEY=sb_secret_your-key-here
+MCP_USER_EMAIL=you@example.com
