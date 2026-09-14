@@ -26,7 +26,7 @@
 
 do $$
 declare
-  v_email  text := 'you@example.com';  -- the account that owns the existing 128 tasks
+  v_email  text := 'you@example.com';  -- replace with the email that owns the existing tasks
   v_user   uuid;
   v_board  uuid;
   v_moved  bigint;
