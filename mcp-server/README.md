@@ -4,12 +4,31 @@ A remote MCP server that lets Claude (Claude.ai, Cowork, Claude Desktop, Claude 
 manage tasks on your Pinboard directly — add tasks, add sub-tasks, move
 things between columns, and list what's there.
 
-It's purpose-built for this board only: five tools (`list_tasks`, `add_task`,
-`add_subtask`, `update_task`, `delete_task`) that mirror exactly what the web UI
-does, instead of exposing a general-purpose Supabase/SQL connector with much
-broader access. It talks to the same `tasks` table as `index.html`, using the
-same public anon key (already embedded in that page), so it respects the same
-permissions and shows up live in the board via the existing realtime sync.
+It's purpose-built for this board only: six tools (`list_boards`,
+`list_tasks`, `add_task`, `add_subtask`, `update_task`, `delete_task`) that
+mirror what the web UI does, instead of exposing a general-purpose
+Supabase/SQL connector with much broader access. Changes show up live in the
+board via its realtime sync.
+
+## Boards
+
+The connector acts as one Pinboard account, set by `MCP_USER_EMAIL`, and can
+only reach boards that account is a member of. `list_boards` shows them;
+`list_tasks` and `add_task` take an optional `board` (name or id) and default
+to your personal board — the oldest board you own. Sub-tasks always go on
+their parent's board.
+
+## How access is enforced
+
+The server reads and writes with a Supabase **secret key**, which bypasses
+row-level security. So the database is not what keeps it inside your boards —
+the code is. Every tool first resolves `MCP_USER_EMAIL` to an account and its
+board memberships (`loadScope()` in `src/index.ts`), then filters every query
+by those board ids, including on the write itself. A task id that isn't on
+your boards gets the same "not found" as one that doesn't exist.
+
+Anyone changing the tools needs to keep that property: never query `tasks`
+without a `board_id` filter drawn from `loadScope()`.
 
 ## Auth
 
@@ -35,7 +54,9 @@ npx wrangler login                      # authorizes the CLI against your Cloudf
 npx wrangler kv namespace create OAUTH_KV
 # copy the printed "id" into wrangler.jsonc, replacing REPLACE_WITH_KV_NAMESPACE_ID
 
-npx wrangler secret put OWNER_PASSWORD  # paste a real password when prompted
+npx wrangler secret put OWNER_PASSWORD       # password on the /authorize screen
+npx wrangler secret put SUPABASE_SECRET_KEY  # Supabase → Settings → API Keys → secret key (sb_secret_…)
+npx wrangler secret put MCP_USER_EMAIL       # the Pinboard account this connector acts as
 npx wrangler deploy
 ```
 
@@ -51,8 +72,7 @@ documents) all live on the same origin and don't need separate configuration.
 
 ## Local testing
 
-Copy `.dev.vars.example` to `.dev.vars` and fill in a test `OWNER_PASSWORD`,
-then:
+Copy `.dev.vars.example` to `.dev.vars` and fill in all three values, then:
 
 ```bash
 npx wrangler dev

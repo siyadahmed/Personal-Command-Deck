@@ -85,8 +85,16 @@ She opens the same URL and enters her own email. Signups are open, so she
 gets an account and — via the trigger — her own empty board. She cannot see
 yours; board membership is only ever explicit.
 
-## 7. After cutover
+## 7. The Claude connector
 
-The MCP server stops working at step 5, because it authenticates with the
-anon key and will see zero rows. It needs moving to `service_role` with a
-board-aware configuration. See `mcp-server/README.md`.
+The connector (`mcp-server/`) reads and writes with a Supabase secret key
+scoped in code to one account's boards. It needs two Worker secrets beyond
+`OWNER_PASSWORD`:
+
+1. In **Settings → API Keys**, create a secret key (e.g. `pinboard-mcp`) so it
+   can be revoked on its own.
+2. From `mcp-server/`:
+   `npx wrangler secret put SUPABASE_SECRET_KEY` and
+   `npx wrangler secret put MCP_USER_EMAIL`, then `npx wrangler deploy`.
+
+See `mcp-server/README.md` for how access is enforced.
