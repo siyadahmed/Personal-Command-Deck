@@ -65,7 +65,14 @@ type Task = {
 	updated_at: string;
 };
 
-type Board = { id: string; name: string; role: "owner" | "member"; created_at: string };
+type Board = {
+	id: string;
+	name: string;
+	role: "owner" | "member";
+	created_at: string;
+	/** Areas this account may see on the board; null means every area (owners). */
+	visible_areas: string[] | null;
+};
 
 /** Who this connector acts as, and every board they may touch. */
 type Scope = { userId: string; boards: Board[] };
@@ -144,11 +151,21 @@ async function loadScope(env: WorkerEnv): Promise<Scope> {
 
 	const rows = (await rest(
 		env,
-		`board_members?user_id=eq.${userId}&select=role,boards(id,name,created_at)`,
-	)) as { role: Board["role"]; boards: { id: string; name: string; created_at: string } | null }[];
+		`board_members?user_id=eq.${userId}&select=role,visible_areas,boards(id,name,created_at)`,
+	)) as {
+		role: Board["role"];
+		visible_areas: string[] | null;
+		boards: { id: string; name: string; created_at: string } | null;
+	}[];
 	const boards = rows
 		.filter((r) => r.boards)
-		.map((r) => ({ id: r.boards!.id, name: r.boards!.name, created_at: r.boards!.created_at, role: r.role }))
+		.map((r) => ({
+			id: r.boards!.id,
+			name: r.boards!.name,
+			created_at: r.boards!.created_at,
+			role: r.role,
+			visible_areas: r.visible_areas,
+		}))
 		.sort((a, b) => a.created_at.localeCompare(b.created_at));
 	if (boards.length === 0) throw new Error(`${email} isn't a member of any board.`);
 	return { userId, boards };
@@ -173,14 +190,30 @@ function pickBoard(scope: Scope, board?: string): Board {
 	throw new Error(`No board called "${wanted}". Your boards: ${names}.`);
 }
 
-/** Fetches a task only if it sits on one of your boards. */
+/**
+ * Mirrors the database's "tasks: visible areas" policy, which the secret key
+ * skips: owners see every area, members only the areas granted to them.
+ */
+function canSee(board: Board, area: string): boolean {
+	return board.visible_areas === null || board.visible_areas.includes(area);
+}
+
+function hiddenAreaError(board: Board, area: string): Error {
+	return new Error(`You don't have access to ${area} tasks on "${board.name}".`);
+}
+
+/** Fetches a task only if it sits on one of your boards, in an area you can see. */
 async function findTask(env: WorkerEnv, scope: Scope, id: string): Promise<Task> {
 	const boardIds = scope.boards.map((b) => b.id).join(",");
 	const rows = (await rest(env, `tasks?id=eq.${enc(id)}&board_id=in.(${boardIds})&select=*`)) as Task[];
-	// Same message whether the task doesn't exist or belongs to someone else,
-	// so the connector can't be used to probe for other people's task ids.
-	if (!rows[0]) throw new Error(`No task found with id "${id}" on your boards.`);
-	return rows[0];
+	const task = rows[0];
+	const board = task && scope.boards.find((b) => b.id === task.board_id);
+	// Same message whether the task doesn't exist, belongs to someone else, or
+	// is in an area hidden from you — so ids can't be probed for.
+	if (!task || !board || !canSee(board, task.area)) {
+		throw new Error(`No task found with id "${id}" on your boards.`);
+	}
+	return task;
 }
 
 function taskSummary(t: Task, scope: Scope) {
@@ -214,14 +247,21 @@ function createServer(env: WorkerEnv) {
 			title: "List boards",
 			description:
 				"List the boards you can use — your personal board and any shared boards you're a member of. " +
-				"Pass a board's name or id to the other tools to work on it.",
+				"Pass a board's name or id to the other tools to work on it. `areas` is \"all\" if you can see " +
+				"every area on that board, otherwise the areas you've been given access to.",
 			inputSchema: z.object({}),
 		},
 		async () => {
 			const scope = await loadScope(env);
 			const fallback = defaultBoard(scope);
 			return jsonResult(
-				scope.boards.map((b) => ({ id: b.id, name: b.name, role: b.role, default: b.id === fallback.id })),
+				scope.boards.map((b) => ({
+					id: b.id,
+					name: b.name,
+					role: b.role,
+					areas: b.visible_areas ?? "all",
+					default: b.id === fallback.id,
+				})),
 			);
 		},
 	);
@@ -248,7 +288,13 @@ function createServer(env: WorkerEnv) {
 				order: "updated_at.desc",
 			});
 			if (status) params.set("status", `eq.${status}`);
-			if (area) params.set("area", `eq.${area}`);
+			if (area) {
+				if (!canSee(target, area)) throw hiddenAreaError(target, area);
+				params.set("area", `eq.${area}`);
+			} else if (target.visible_areas !== null) {
+				if (target.visible_areas.length === 0) return jsonResult([]);
+				params.set("area", `in.(${target.visible_areas.join(",")})`);
+			}
 			const rows = (await rest(env, `tasks?${params}`)) as Task[];
 			return jsonResult(rows.map((t) => taskSummary(t, scope)));
 		},
@@ -270,6 +316,7 @@ function createServer(env: WorkerEnv) {
 		async ({ board, title, area, status, notes }) => {
 			const scope = await loadScope(env);
 			const target = pickBoard(scope, board);
+			if (!canSee(target, area)) throw hiddenAreaError(target, area);
 			const row = {
 				id: uid(),
 				title: title.trim(),
@@ -337,7 +384,8 @@ function createServer(env: WorkerEnv) {
 			title: "Update a task",
 			description:
 				"Edit a task's title, notes, status, or area. Only the fields you pass are changed. " +
-				"To move a task to a different column, set status.",
+				"To move a task to a different column, set status. Changing a top-level task's area moves its " +
+				"sub-tasks with it; a sub-task's area can't be set directly.",
 			inputSchema: z.object({
 				id: z.string(),
 				title: z.string().min(1).max(140).optional(),
@@ -351,6 +399,13 @@ function createServer(env: WorkerEnv) {
 			if (Object.keys(fields).length === 0) throw new Error("Nothing to update — pass at least one field.");
 			const scope = await loadScope(env);
 			const task = await findTask(env, scope, id);
+			if (fields.area !== undefined && fields.area !== task.area) {
+				if (task.parent_id) {
+					throw new Error("A sub-task always takes its parent's area — change the parent's area instead.");
+				}
+				const board = scope.boards.find((b) => b.id === task.board_id)!;
+				if (!canSee(board, fields.area as string)) throw hiddenAreaError(board, fields.area as string);
+			}
 			// Board filter repeated on the write itself, not just the lookup.
 			const updated = (await rest(env, `tasks?id=eq.${enc(task.id)}&board_id=eq.${task.board_id}`, {
 				method: "PATCH",

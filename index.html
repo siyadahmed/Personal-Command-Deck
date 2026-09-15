@@ -483,14 +483,30 @@
       });
   }
 
+  // Areas you can see on the open board. Owners see all of them; a member
+  // sees what the owner granted. The database already hides the rest — this
+  // keeps the picker and meter from offering areas that would be refused.
+  function visibleAreaIds(){
+    const m = memberships.get(currentBoardId);
+    const all = Object.keys(AREA_DEFS);
+    return (m && Array.isArray(m.visible_areas)) ? all.filter(a => m.visible_areas.includes(a)) : all;
+  }
+
   function populateAreaSelect(){
-    $newArea.innerHTML = Object.entries(AREA_DEFS).map(([id,def]) =>
-      `<option value="${id}">${def.label}</option>`).join('');
+    const areas = visibleAreaIds();
+    $newArea.innerHTML = areas.map(id => `<option value="${id}">${AREA_DEFS[id].label}</option>`).join('');
+    const canAdd = areas.length > 0;
+    $newTitle.disabled = !canAdd;
+    $newArea.disabled = !canAdd;
+    document.getElementById('addBtn').disabled = !canAdd;
+    $newTitle.placeholder = canAdd
+      ? 'Add a task or plan… e.g. Script next YouTube video'
+      : "You haven't been given access to any areas on this board";
   }
 
   function areaCounts(){
     const counts = {};
-    Object.keys(AREA_DEFS).forEach(a => counts[a]=0);
+    visibleAreaIds().forEach(a => counts[a]=0);
     state.tasks.forEach(t => { if(t.status!=='done') counts[t.area] = (counts[t.area]||0)+1; });
     return counts;
   }
@@ -508,8 +524,9 @@
         const seg = document.createElement('div');
         seg.className = 'meter-seg';
         seg.style.width = pct+'%';
-        seg.style.background = AREA_DEFS[area].color;
-        seg.title = `${AREA_DEFS[area].label}: ${count} open`;
+        const def = AREA_DEFS[area] || AREA_DEFS.other;
+        seg.style.background = def.color;
+        seg.title = `${def.label}: ${count} open`;
         seg.addEventListener('click', ()=>{
           activeAreaFilter = activeAreaFilter === area ? null : area;
           render();
@@ -518,7 +535,7 @@
       });
     }
     $meterLegend.innerHTML = '';
-    Object.entries(AREA_DEFS).forEach(([id,def])=>{
+    visibleAreaIds().map(id => [id, AREA_DEFS[id]]).forEach(([id,def])=>{
       const item = document.createElement('div');
       item.className = 'legend-item' + (activeAreaFilter && activeAreaFilter!==id ? ' off':'');
       item.innerHTML = `<span class="dot" style="background:${def.color}"></span>${def.label} · ${counts[id]||0}`;
@@ -855,12 +872,18 @@
   });
 
   // ---- Boards ----------------------------------------------------------
+  let memberships = new Map();   // board id -> { role, visible_areas }
+
   async function loadBoards(){
-    const { data, error } = await sb.from('boards').select('*').order('created_at');
-    if(error){
-      showToast('Could not load your boards: ' + error.message);
+    const [{ data, error }, { data: mine, error: memberErr }] = await Promise.all([
+      sb.from('boards').select('*').order('created_at'),
+      sb.from('board_members').select('board_id, role, visible_areas').eq('user_id', currentUser.id)
+    ]);
+    if(error || memberErr){
+      showToast('Could not load your boards: ' + (error || memberErr).message);
       return;
     }
+    memberships = new Map((mine || []).map(m => [m.board_id, m]));
     boards = data || [];
     const saved = localStorage.getItem(BOARD_KEY);
     currentBoardId = boards.some(b => b.id === saved) ? saved
@@ -869,7 +892,10 @@
 
     $boardSelect.innerHTML = boards.map(b =>
       `<option value="${b.id}"></option>`).join('');
-    [...$boardSelect.options].forEach((opt, i) => { opt.textContent = boards[i].name; });
+    [...$boardSelect.options].forEach((opt, i) => {
+      const shared = memberships.get(boards[i].id)?.role === 'member';
+      opt.textContent = boards[i].name + (shared ? ' (shared with you)' : '');
+    });
     $boardSelect.value = currentBoardId || '';
     // A switcher with one option is just clutter — it appears when there's
     // somewhere to switch to.
@@ -880,6 +906,7 @@
     currentBoardId = $boardSelect.value;
     localStorage.setItem(BOARD_KEY, currentBoardId);
     activeAreaFilter = null;
+    populateAreaSelect();
     await load();
   });
 
@@ -901,8 +928,12 @@
     $app.classList.remove('hidden');
     // Strip the magic-link tokens out of the address bar once consumed.
     history.replaceState({}, document.title, window.location.pathname + window.location.search);
-    populateAreaSelect();
+    // Accept any boards shared with this email since the account was made.
+    // Harmless no-op if there are none.
+    const { error: claimErr } = await sb.rpc('claim_board_invites');
+    if(claimErr) console.warn('Could not check for shared boards:', claimErr.message);
     await loadBoards();
+    populateAreaSelect();
     if(!currentBoardId){
       $statusPill.textContent = 'no board';
       showToast('Your account has no board yet — reload in a moment.');
